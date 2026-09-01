@@ -17,6 +17,18 @@ class GmailError(OzonParserError):
     """Base class for Gmail integration errors."""
 
 
+class GmailAuthenticationError(GmailError):
+    """Gmail OAuth credentials could not be loaded or refreshed."""
+
+
+class GmailApiError(GmailError):
+    """A Gmail API request failed."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
 class GmailMessageNotFoundError(GmailError):
     """No fresh Ozon verification message arrived before the timeout."""
 
@@ -43,4 +55,3 @@ class ProductParseError(OzonParserError):
 
 class StorageError(OzonParserError):
     """A parsed product could not be persisted."""
-

@@ -28,12 +28,26 @@ def _int_from_env(name: str, default: int) -> int:
         raise ConfigurationError(f"{name} must be an integer") from exc
 
 
+def _float_from_env(name: str, default: float) -> float:
+    raw_value = os.getenv(name, str(default))
+    try:
+        return float(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a number") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Runtime settings without validation tied to a specific entry point."""
 
     ozon_phone: str | None
     cookies_path: Path
+    gmail_credentials_path: Path
+    gmail_token_path: Path
+    gmail_ozon_query: str
+    gmail_poll_interval: float
+    gmail_timeout: float
+    gmail_max_results: int
     results_dir: Path
     log_level: str
     postgres_host: str
@@ -49,6 +63,16 @@ class Settings:
         return cls(
             ozon_phone=os.getenv("OZON_PHONE") or None,
             cookies_path=_path_from_env("COOKIES_PATH", "cookies.json"),
+            gmail_credentials_path=_path_from_env(
+                "GMAIL_CREDENTIALS_PATH", "credentials.json"
+            ),
+            gmail_token_path=_path_from_env("GMAIL_TOKEN_PATH", "token.json"),
+            gmail_ozon_query=os.getenv(
+                "GMAIL_OZON_QUERY", "from:(ozon.ru)"
+            ),
+            gmail_poll_interval=_float_from_env("GMAIL_POLL_INTERVAL", 5.0),
+            gmail_timeout=_float_from_env("GMAIL_TIMEOUT", 120.0),
+            gmail_max_results=_int_from_env("GMAIL_MAX_RESULTS", 10),
             results_dir=_path_from_env("RESULTS_DIR", "results"),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             postgres_host=os.getenv("POSTGRES_HOST", "localhost"),
@@ -76,4 +100,3 @@ class Settings:
 def get_settings(env_file: Path | None = None) -> Settings:
     """Build a fresh settings object, which also keeps tests isolated."""
     return Settings.from_env(env_file)
-
