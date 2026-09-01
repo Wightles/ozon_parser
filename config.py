@@ -36,12 +36,26 @@ def _float_from_env(name: str, default: float) -> float:
         raise ConfigurationError(f"{name} must be a number") from exc
 
 
+def _bool_from_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name, str(default)).strip().casefold()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"{name} must be true or false")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Runtime settings without validation tied to a specific entry point."""
 
     ozon_phone: str | None
     cookies_path: Path
+    ozon_login_url: str
+    ozon_headless: bool
+    ozon_navigation_timeout: float
+    ozon_login_timeout: float
+    ozon_manual_timeout: float
     gmail_credentials_path: Path
     gmail_token_path: Path
     gmail_ozon_query: str
@@ -63,6 +77,17 @@ class Settings:
         return cls(
             ozon_phone=os.getenv("OZON_PHONE") or None,
             cookies_path=_path_from_env("COOKIES_PATH", "cookies.json"),
+            ozon_login_url=os.getenv(
+                "OZON_LOGIN_URL", "https://data.ozon.ru/"
+            ),
+            ozon_headless=_bool_from_env("OZON_HEADLESS", False),
+            ozon_navigation_timeout=_float_from_env(
+                "OZON_NAVIGATION_TIMEOUT", 30.0
+            ),
+            ozon_login_timeout=_float_from_env("OZON_LOGIN_TIMEOUT", 120.0),
+            ozon_manual_timeout=_float_from_env(
+                "OZON_MANUAL_TIMEOUT", 300.0
+            ),
             gmail_credentials_path=_path_from_env(
                 "GMAIL_CREDENTIALS_PATH", "credentials.json"
             ),

@@ -13,6 +13,10 @@ class OzonLoginError(OzonParserError):
     """Browser authorization did not complete successfully."""
 
 
+class OzonCaptchaError(OzonLoginError):
+    """Ozon anti-bot protection requires or failed manual completion."""
+
+
 class GmailError(OzonParserError):
     """Base class for Gmail integration errors."""
 
