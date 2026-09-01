@@ -1,0 +1,25 @@
+# Local configuration and secrets
+.env
+credentials.json
+token.json
+cookies.json
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated output and logs
+results/*.csv
+*.log
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
