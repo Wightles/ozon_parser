@@ -16,10 +16,10 @@ htmlcov/
 
 # Generated output and logs
 results/*.csv
+diagnostics/
 *.log
 
 # Editors and operating systems
 .idea/
 .vscode/
 .DS_Store
-
