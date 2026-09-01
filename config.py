@@ -56,6 +56,10 @@ class Settings:
     ozon_navigation_timeout: float
     ozon_login_timeout: float
     ozon_manual_timeout: float
+    ozon_http_connect_timeout: float
+    ozon_http_read_timeout: float
+    ozon_http_max_redirects: int
+    ozon_user_agent: str | None
     gmail_credentials_path: Path
     gmail_token_path: Path
     gmail_ozon_query: str
@@ -88,6 +92,16 @@ class Settings:
             ozon_manual_timeout=_float_from_env(
                 "OZON_MANUAL_TIMEOUT", 300.0
             ),
+            ozon_http_connect_timeout=_float_from_env(
+                "OZON_HTTP_CONNECT_TIMEOUT", 10.0
+            ),
+            ozon_http_read_timeout=_float_from_env(
+                "OZON_HTTP_READ_TIMEOUT", 30.0
+            ),
+            ozon_http_max_redirects=_int_from_env(
+                "OZON_HTTP_MAX_REDIRECTS", 5
+            ),
+            ozon_user_agent=os.getenv("OZON_USER_AGENT") or None,
             gmail_credentials_path=_path_from_env(
                 "GMAIL_CREDENTIALS_PATH", "credentials.json"
             ),

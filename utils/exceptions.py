@@ -45,12 +45,24 @@ class CookiesNotFoundError(OzonParserError):
     """The cookies file does not exist or cannot be read."""
 
 
+class CookiesInvalidError(OzonParserError):
+    """The cookies file has an invalid or unsafe structure."""
+
+
 class CookiesExpiredError(OzonParserError):
     """Stored cookies no longer grant access to a product page."""
 
 
 class ProductPageError(OzonParserError):
     """A product page could not be fetched or was unexpected."""
+
+
+class ProductNotFoundError(ProductPageError):
+    """The requested Ozon SKU does not exist."""
+
+
+class OzonAntiBotError(ProductPageError):
+    """Ozon returned an anti-bot or rate-limit page."""
 
 
 class ProductParseError(OzonParserError):
