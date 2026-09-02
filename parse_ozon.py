@@ -11,6 +11,7 @@ from typing import Protocol
 from models.product import Product
 from parsers.product_parser import ProductParser
 from storage.csv_storage import CsvProductStorage
+from storage.postgres_storage import PostgresProductStorage
 from utils.exceptions import OzonParserError
 
 
@@ -108,6 +109,19 @@ def main() -> int:
             )
     except OzonParserError as exc:
         LOGGER.error("Ozon batch parser failed: %s", exc)
+        return 1
+
+    try:
+        with PostgresProductStorage.from_settings(settings) as storage:
+            storage.initialize_schema()
+            row_count = storage.save(result.products)
+        LOGGER.info("Saved %d products to PostgreSQL", row_count)
+    except OzonParserError as exc:
+        LOGGER.error(
+            "PostgreSQL save failed; CSV remains available at %s: %s",
+            output_path,
+            exc,
+        )
         return 1
 
     if result.has_failures:
