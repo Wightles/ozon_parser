@@ -3,24 +3,33 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from models.product import Product
 from storage.postgres_storage import (
+    HISTORY_COLUMNS,
+    INSERT_HISTORY_SQL,
     PRODUCT_COLUMNS,
     UPSERT_PRODUCT_SQL,
     PostgresProductStorage,
     product_to_db_params,
+    product_to_history_params,
 )
 from utils.exceptions import StorageError
 
 
 class FakeCursor:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        fail_on_many_call: int | None = None,
+    ) -> None:
         self.fail = fail
+        self.fail_on_many_call = fail_on_many_call
+        self.many_attempts = 0
         self.executed: list[tuple[str, Sequence[Any] | None]] = []
         self.executed_many: list[
             tuple[str, Sequence[Sequence[Any]]]
@@ -40,7 +49,8 @@ class FakeCursor:
         query: str,
         params_seq: Sequence[Sequence[Any]],
     ) -> None:
-        if self.fail:
+        self.many_attempts += 1
+        if self.fail or self.many_attempts == self.fail_on_many_call:
             raise RuntimeError("synthetic database failure")
         self.executed_many.append((query, params_seq))
 
@@ -52,8 +62,16 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.cursor_instance = FakeCursor(fail=fail)
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        fail_on_many_call: int | None = None,
+    ) -> None:
+        self.cursor_instance = FakeCursor(
+            fail=fail,
+            fail_on_many_call=fail_on_many_call,
+        )
         self.commits = 0
         self.rollbacks = 0
         self.closed = False
@@ -81,7 +99,9 @@ def test_product_mapping_follows_column_order(sample_product: Product) -> None:
     }
 
 
-def test_save_uses_upsert_and_commits(sample_product: Product) -> None:
+def test_save_updates_current_row_and_appends_history(
+    sample_product: Product,
+) -> None:
     connection = FakeConnection()
     storage = PostgresProductStorage(connection)
 
@@ -90,10 +110,15 @@ def test_save_uses_upsert_and_commits(sample_product: Product) -> None:
     assert row_count == 1
     assert connection.commits == 1
     assert connection.rollbacks == 0
-    query, params_seq = connection.cursor_instance.executed_many[0]
-    assert query == UPSERT_PRODUCT_SQL
-    assert "ON CONFLICT (sku) DO UPDATE" in query
-    assert params_seq == [product_to_db_params(sample_product)]
+    current_call, history_call = connection.cursor_instance.executed_many
+    current_query, current_params = current_call
+    history_query, history_params = history_call
+    assert current_query == UPSERT_PRODUCT_SQL
+    assert "ON CONFLICT (sku) DO UPDATE" in current_query
+    assert current_params == [product_to_db_params(sample_product)]
+    assert history_query == INSERT_HISTORY_SQL
+    assert "ON CONFLICT" not in history_query
+    assert history_params == [product_to_history_params(sample_product)]
 
 
 def test_empty_save_does_not_open_transaction() -> None:
@@ -106,27 +131,59 @@ def test_empty_save_does_not_open_transaction() -> None:
     assert connection.cursor_instance.executed_many == []
 
 
-def test_initialize_schema_executes_products_table(tmp_path: Path) -> None:
-    schema_path = tmp_path / "schema.sql"
-    schema_path.write_text(
-        "CREATE TABLE IF NOT EXISTS products (sku VARCHAR PRIMARY KEY);",
-        encoding="utf-8",
-    )
+def test_initialize_schema_executes_current_and_history_tables() -> None:
     connection = FakeConnection()
 
-    PostgresProductStorage(connection).initialize_schema(schema_path)
+    PostgresProductStorage(connection).initialize_schema()
 
     assert connection.commits == 1
     query, params = connection.cursor_instance.executed[0]
     assert "CREATE TABLE IF NOT EXISTS products" in query
+    assert "CREATE TABLE IF NOT EXISTS product_history" in query
+    assert "idx_product_history_sku_parsed_at" in query
     assert params is None
 
 
 def test_database_error_rolls_back(sample_product: Product) -> None:
-    connection = FakeConnection(fail=True)
+    connection = FakeConnection(fail_on_many_call=2)
 
-    with pytest.raises(StorageError, match="Cannot UPSERT products"):
+    with pytest.raises(StorageError, match="Cannot save products and history"):
         PostgresProductStorage(connection).save([sample_product])
 
     assert connection.commits == 0
     assert connection.rollbacks == 1
+    assert len(connection.cursor_instance.executed_many) == 1
+
+
+def test_history_mapping_contains_only_changing_metrics(
+    sample_product: Product,
+) -> None:
+    params = product_to_history_params(sample_product)
+
+    assert len(params) == len(HISTORY_COLUMNS) == 5
+    assert dict(zip(HISTORY_COLUMNS, params, strict=True)) == {
+        "sku": sample_product.sku,
+        "price": sample_product.price,
+        "rating": sample_product.rating,
+        "reviews_total": sample_product.reviews_total,
+        "parsed_at": sample_product.parsed_at,
+    }
+
+
+def test_repeated_save_keeps_appending_history(
+    sample_product: Product,
+) -> None:
+    connection = FakeConnection()
+    storage = PostgresProductStorage(connection)
+
+    storage.save([sample_product])
+    storage.save([sample_product])
+
+    calls = connection.cursor_instance.executed_many
+    assert [query for query, _ in calls] == [
+        UPSERT_PRODUCT_SQL,
+        INSERT_HISTORY_SQL,
+        UPSERT_PRODUCT_SQL,
+        INSERT_HISTORY_SQL,
+    ]
+    assert connection.commits == 2

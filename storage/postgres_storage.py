@@ -31,6 +31,13 @@ PRODUCT_COLUMNS = (
     "has_rich_content",
     "parsed_at",
 )
+HISTORY_COLUMNS = (
+    "sku",
+    "price",
+    "rating",
+    "reviews_total",
+    "parsed_at",
+)
 
 UPSERT_PRODUCT_SQL = """
 INSERT INTO products (
@@ -64,6 +71,16 @@ ON CONFLICT (sku) DO UPDATE SET
     art_set = EXCLUDED.art_set,
     has_rich_content = EXCLUDED.has_rich_content,
     parsed_at = EXCLUDED.parsed_at
+""".strip()
+
+INSERT_HISTORY_SQL = """
+INSERT INTO product_history (
+    sku,
+    price,
+    rating,
+    reviews_total,
+    parsed_at
+) VALUES (%s, %s, %s, %s, %s)
 """.strip()
 
 
@@ -108,8 +125,13 @@ def product_to_db_params(product: Product) -> tuple[Any, ...]:
     return tuple(getattr(product, column) for column in PRODUCT_COLUMNS)
 
 
+def product_to_history_params(product: Product) -> tuple[Any, ...]:
+    """Map changing metrics to the history INSERT parameter order."""
+    return tuple(getattr(product, column) for column in HISTORY_COLUMNS)
+
+
 class PostgresProductStorage:
-    """Initialize and update the current PostgreSQL product snapshot."""
+    """Persist current products and an append-only metrics history."""
 
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
@@ -147,7 +169,7 @@ class PostgresProductStorage:
         self.connection.close()
 
     def initialize_schema(self, path: Path = DEFAULT_SCHEMA_PATH) -> None:
-        """Apply the idempotent products schema in one transaction."""
+        """Apply the idempotent current and history schema in one transaction."""
         try:
             schema_sql = path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -165,19 +187,31 @@ class PostgresProductStorage:
             raise StorageError("Cannot initialize PostgreSQL schema") from exc
 
     def save(self, products: Iterable[Product]) -> int:
-        """UPSERT all supplied products in one database transaction."""
-        params = [product_to_db_params(product) for product in products]
-        if not params:
+        """UPSERT current rows and append history in one transaction."""
+        product_list = list(products)
+        if not product_list:
             return 0
+
+        current_params = [
+            product_to_db_params(product)
+            for product in product_list
+        ]
+        history_params = [
+            product_to_history_params(product)
+            for product in product_list
+        ]
 
         try:
             with self.connection.cursor() as cursor:
-                cursor.executemany(UPSERT_PRODUCT_SQL, params)
+                cursor.executemany(UPSERT_PRODUCT_SQL, current_params)
+                cursor.executemany(INSERT_HISTORY_SQL, history_params)
             self.connection.commit()
         except Exception as exc:
             self._rollback()
-            raise StorageError("Cannot UPSERT products into PostgreSQL") from exc
-        return len(params)
+            raise StorageError(
+                "Cannot save products and history to PostgreSQL"
+            ) from exc
+        return len(product_list)
 
     def _rollback(self) -> None:
         try:

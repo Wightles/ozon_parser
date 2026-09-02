@@ -115,7 +115,10 @@ def main() -> int:
         with PostgresProductStorage.from_settings(settings) as storage:
             storage.initialize_schema()
             row_count = storage.save(result.products)
-        LOGGER.info("Saved %d products to PostgreSQL", row_count)
+        LOGGER.info(
+            "Saved %d current products and history rows to PostgreSQL",
+            row_count,
+        )
     except OzonParserError as exc:
         LOGGER.error(
             "PostgreSQL save failed; CSV remains available at %s: %s",
