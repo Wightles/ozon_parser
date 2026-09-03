@@ -9,6 +9,8 @@ import pytest
 
 from models.product import Product
 from storage.postgres_storage import (
+    CHECK_CONNECTION_SQL,
+    FIND_PRODUCTS_SQL,
     HISTORY_COLUMNS,
     INSERT_HISTORY_SQL,
     PRODUCT_COLUMNS,
@@ -26,10 +28,12 @@ class FakeCursor:
         *,
         fail: bool = False,
         fail_on_many_call: int | None = None,
+        rows: Sequence[Sequence[Any]] = (),
     ) -> None:
         self.fail = fail
         self.fail_on_many_call = fail_on_many_call
         self.many_attempts = 0
+        self.rows = rows
         self.executed: list[tuple[str, Sequence[Any] | None]] = []
         self.executed_many: list[
             tuple[str, Sequence[Sequence[Any]]]
@@ -54,6 +58,9 @@ class FakeCursor:
             raise RuntimeError("synthetic database failure")
         self.executed_many.append((query, params_seq))
 
+    def fetchall(self) -> Sequence[Sequence[Any]]:
+        return self.rows
+
     def __enter__(self) -> FakeCursor:
         return self
 
@@ -67,10 +74,12 @@ class FakeConnection:
         *,
         fail: bool = False,
         fail_on_many_call: int | None = None,
+        rows: Sequence[Sequence[Any]] = (),
     ) -> None:
         self.cursor_instance = FakeCursor(
             fail=fail,
             fail_on_many_call=fail_on_many_call,
+            rows=rows,
         )
         self.commits = 0
         self.rollbacks = 0
@@ -187,3 +196,31 @@ def test_repeated_save_keeps_appending_history(
         INSERT_HISTORY_SQL,
     ]
     assert connection.commits == 2
+
+
+def test_check_connection_executes_minimal_query() -> None:
+    connection = FakeConnection()
+
+    PostgresProductStorage(connection).check_connection()
+
+    assert connection.cursor_instance.executed == [
+        (CHECK_CONNECTION_SQL, None)
+    ]
+    assert connection.commits == 1
+
+
+def test_find_existing_skus_uses_parameterized_query() -> None:
+    connection = FakeConnection(rows=[("2359066702",)])
+
+    existing = PostgresProductStorage(connection).find_existing_skus(
+        ["2359066702", "2829800382", "2359066702"]
+    )
+
+    assert existing == {"2359066702"}
+    assert connection.cursor_instance.executed == [
+        (
+            FIND_PRODUCTS_SQL,
+            (["2359066702", "2829800382"],),
+        )
+    ]
+    assert connection.commits == 1

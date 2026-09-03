@@ -6,13 +6,16 @@ import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from models.product import Product
 from parsers.product_parser import ProductParser
 from storage.csv_storage import CsvProductStorage
 from storage.postgres_storage import PostgresProductStorage
 from utils.exceptions import OzonParserError
+
+if TYPE_CHECKING:
+    from config import Settings
 
 
 LOGGER = logging.getLogger(__name__)
@@ -89,11 +92,32 @@ def run_batch(
     return result
 
 
+def run_configured_batch(settings: Settings) -> BatchResult:
+    """Run the complete CSV and PostgreSQL pipeline from shared settings."""
+    from ozon_client import OzonClient
+
+    output_path = settings.results_dir / CSV_FILENAME
+    with OzonClient.from_settings(settings) as client:
+        result = run_batch(
+            skus=SKUS,
+            client=client,
+            output_path=output_path,
+        )
+
+    with PostgresProductStorage.from_settings(settings) as storage:
+        storage.initialize_schema()
+        row_count = storage.save(result.products)
+    LOGGER.info(
+        "Saved %d current products and history rows to PostgreSQL",
+        row_count,
+    )
+    return result
+
+
 def main() -> int:
     """Run the configured authenticated batch parser."""
     from config import get_settings
     from logging_config import configure_logging
-    from ozon_client import OzonClient
 
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -101,27 +125,10 @@ def main() -> int:
     LOGGER.info("Starting Ozon product parser")
 
     try:
-        with OzonClient.from_settings(settings) as client:
-            result = run_batch(
-                skus=SKUS,
-                client=client,
-                output_path=output_path,
-            )
-    except OzonParserError as exc:
-        LOGGER.error("Ozon batch parser failed: %s", exc)
-        return 1
-
-    try:
-        with PostgresProductStorage.from_settings(settings) as storage:
-            storage.initialize_schema()
-            row_count = storage.save(result.products)
-        LOGGER.info(
-            "Saved %d current products and history rows to PostgreSQL",
-            row_count,
-        )
+        result = run_configured_batch(settings)
     except OzonParserError as exc:
         LOGGER.error(
-            "PostgreSQL save failed; CSV remains available at %s: %s",
+            "Ozon pipeline failed; any written CSV remains at %s: %s",
             output_path,
             exc,
         )

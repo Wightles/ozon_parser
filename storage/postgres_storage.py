@@ -83,6 +83,9 @@ INSERT INTO product_history (
 ) VALUES (%s, %s, %s, %s, %s)
 """.strip()
 
+CHECK_CONNECTION_SQL = "SELECT 1"
+FIND_PRODUCTS_SQL = "SELECT sku FROM products WHERE sku = ANY(%s)"
+
 
 class Cursor(Protocol):
     def execute(
@@ -97,6 +100,9 @@ class Cursor(Protocol):
         query: str,
         params_seq: Sequence[Sequence[Any]],
     ) -> Any:
+        ...
+
+    def fetchall(self) -> Sequence[Sequence[Any]]:
         ...
 
     def __enter__(self) -> Cursor:
@@ -212,6 +218,39 @@ class PostgresProductStorage:
                 "Cannot save products and history to PostgreSQL"
             ) from exc
         return len(product_list)
+
+    def check_connection(self) -> None:
+        """Run a minimal query to verify that PostgreSQL is responsive."""
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(CHECK_CONNECTION_SQL)
+            self.connection.commit()
+        except Exception as exc:
+            self._rollback()
+            raise StorageError("PostgreSQL health check failed") from exc
+
+    def find_existing_skus(self, skus: Iterable[str]) -> set[str]:
+        """Return requested SKU values currently present in products."""
+        normalized_skus = list(
+            dict.fromkeys(sku.strip() for sku in skus if sku.strip())
+        )
+        if not normalized_skus:
+            return set()
+
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(FIND_PRODUCTS_SQL, (normalized_skus,))
+                rows = cursor.fetchall()
+            self.connection.commit()
+        except Exception as exc:
+            self._rollback()
+            raise StorageError("Cannot validate products in PostgreSQL") from exc
+
+        return {
+            str(row[0])
+            for row in rows
+            if row and row[0] is not None
+        }
 
     def _rollback(self) -> None:
         try:
