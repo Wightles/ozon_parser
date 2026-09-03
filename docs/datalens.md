@@ -13,6 +13,23 @@ DataLens получает данные из двух SQL-представлен�
 состояние с историей по `sku` в одном датасете, одна строка товара размножится
 по числу исторических снимков и итоговые KPI окажутся завышены.
 
+## Проверенная конфигурация
+
+На этапе реальной настройки была проверена следующая схема:
+
+- PostgreSQL размещен в Neon, база `neondb`, ветка `production`;
+- приложение подключается к Neon с `sslmode=require` и
+  `channel_binding=require`;
+- DataLens использует отдельную роль `datalens_reader`, которой разрешено
+  читать только `datalens_products` и `datalens_product_history`;
+- в книге `Ozon analytics` созданы соединение `Ozon PostgreSQL`, два датасета,
+  пять KPI, таблица, три линейных графика и дашборд
+  `Ozon products dashboard`.
+
+До первого успешного запуска парсера индикатор количества показывает `0`, а
+остальные чарты — `Нет данных`. Это ожидаемо: фиктивные строки для оформления
+дашборда не добавляются.
+
 ## 1. Запуск локального PostgreSQL
 
 Создайте `.env` из `.env.example`, задайте надежный локальный
@@ -48,21 +65,21 @@ docker compose exec postgres sh -c \
 Локальный контейнер предназначен для разработки. Облачный DataLens не сможет
 подключиться к `localhost`, `127.0.0.1`, имени Docker-сервиса `postgres` или
 ноутбуку за NAT. Не публикуйте порт домашнего компьютера в интернет только
-ради DataLens. Для постоянного дашборда рекомендуемый вариант — перенести базу
-в Managed Service for PostgreSQL в Yandex Cloud.
+ради DataLens. Для постоянного дашборда используйте доступный по публичной
+сети PostgreSQL с TLS, например Neon, либо Managed Service for PostgreSQL в
+Yandex Cloud.
 
-## 2. Подготовка базы, доступной DataLens
+## 2. Подготовка Neon или другой доступной базы
 
 На целевом PostgreSQL примените `sql/schema.sql` и загрузите данные парсером.
 Для DataLens создайте отдельного пользователя только для чтения. В сеансе
-`psql` выполните команды ниже, заменив `ozon_parser`, если база называется
-иначе:
+`psql` выполните команды ниже, заменив имя базы при необходимости:
 
 ```sql
 CREATE ROLE datalens_reader LOGIN;
 \password datalens_reader
 
-GRANT CONNECT ON DATABASE ozon_parser TO datalens_reader;
+GRANT CONNECT ON DATABASE neondb TO datalens_reader;
 GRANT USAGE ON SCHEMA public TO datalens_reader;
 GRANT SELECT ON datalens_products TO datalens_reader;
 GRANT SELECT ON datalens_product_history TO datalens_reader;
@@ -70,7 +87,24 @@ GRANT SELECT ON datalens_product_history TO datalens_reader;
 
 Команда `\password` запросит секрет интерактивно, поэтому пароль не попадет в
 репозиторий или историю shell. Не используйте для DataLens владельца базы и не
-коммитьте пароль в `.env`.
+коммитьте пароль в `.env`. В Neon роль только для чтения удобнее создавать SQL,
+чтобы случайно не выдать ей расширенные права роли, создаваемой через консоль.
+
+Для подключения приложения к Neon добавьте в локальный `.env`:
+
+```env
+POSTGRES_HOST=<публичный endpoint Neon>
+POSTGRES_PORT=5432
+POSTGRES_DB=neondb
+POSTGRES_USER=<роль приложения>
+POSTGRES_PASSWORD=<пароль роли приложения>
+POSTGRES_SSLMODE=require
+POSTGRES_CHANNEL_BINDING=require
+```
+
+Не копируйте обратные слеши из Markdown-ссылки подключения в значения
+переменных. Полную строку подключения и пароли не публикуйте в задачах,
+скриншотах и Git.
 
 Для Managed Service for PostgreSQL включите доступ из DataLens в настройках
 кластера. Для внешней базы нужны публичный FQDN/IP, TLS-сертификат от
@@ -79,9 +113,6 @@ DataLens. Перед настройкой сверяйте список адре
 <https://yandex.cloud/en/docs/datalens/operations/connection/create-postgresql>.
 
 ## 3. Вход и рабочая книга
-
-Ручные действия этого раздела относятся к следующему этапу и здесь не
-выполнялись.
 
 1. Откройте <https://datalens.yandex.cloud/> и войдите в Yandex ID, которому
    доступна нужная организация Yandex Cloud.
@@ -95,18 +126,18 @@ DataLens. Перед настройкой сверяйте список адре
 
 В книге `Ozon analytics` нажмите **Create -> Connection -> PostgreSQL**.
 
-Для Managed Service for PostgreSQL выберите кластер из организации. Для
-внешней базы выберите ручное указание параметров и заполните:
+Для Managed Service for PostgreSQL выберите кластер из организации. Для Neon
+или другой внешней базы выберите ручное указание параметров и заполните:
 
 | Поле | Значение |
 |---|---|
 | Host name | Публичный FQDN PostgreSQL, не `localhost` |
-| Port | `6432` для Managed PostgreSQL по умолчанию; для внешней базы ее реальный порт |
-| Database | `ozon_parser` или имя целевой базы |
+| Port | `5432` для прямого endpoint Neon; для другой базы ее реальный порт |
+| Database | `neondb` для проверенной конфигурации или имя целевой базы |
 | Username | `datalens_reader` |
 | Password | Пароль, заданный интерактивно |
 | Cache TTL | `300` секунд |
-| TLS | Включен; для внешней базы при необходимости загрузите CA-сертификат |
+| TLS | Включен; для Neon отдельный CA-файл не требуется |
 | Raw SQL level | Отключен: подготовленных SQL views достаточно |
 
 Нажмите **Check connection**, убедитесь, что проверка успешна, затем
@@ -188,7 +219,7 @@ Calculated field** и создайте показатели:
 
 Для полей в таблице используйте значения без итоговой агрегации либо `MAX`,
 если wizard требует агрегацию показателя. Отсортируйте по `parsed_at` по
-убыванию и сохраните chart как `Товары Ozon`.
+убыванию и сохраните chart как `Таблица товаров`.
 
 ## 10. Графики истории
 
@@ -209,9 +240,14 @@ Calculated field** и создайте показатели:
 1. В книге нажмите **Create -> Dashboard**.
 2. Перетащите пять виджетов **Chart** в верхний ряд и выберите KPI-чарты.
 3. Ниже добавьте таблицу товаров и три графика истории.
-4. Добавьте selector по `sku` из `Ozon product history` для исторических
-   графиков и selector по `parsed_at` с типом **Calendar** и режимом диапазона.
-5. Назовите дашборд `Ozon products dashboard` и нажмите **Save**.
+4. Назовите дашборд `Ozon products dashboard` и нажмите **Save**.
+
+При добавлении каждого чарта нажимайте нижнюю кнопку **Добавить** сразу после
+его выбора. Кнопка **+ Добавить** внутри окна создает вкладку в том же виджете,
+из-за чего все визуализации не будут видны одновременно.
+
+Селекторы по `sku` и диапазону `parsed_at` можно добавить дополнительно, когда
+в базе появятся реальные данные.
 
 Selector влияет на виджеты с совместимым датасетом. Поскольку текущие данные
 и история разделены, при необходимости создайте отдельный selector `sku` для

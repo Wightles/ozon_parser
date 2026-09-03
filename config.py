@@ -73,6 +73,8 @@ class Settings:
     postgres_db: str
     postgres_user: str
     postgres_password: str | None
+    postgres_sslmode: str
+    postgres_channel_binding: str
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> Settings:
@@ -119,6 +121,10 @@ class Settings:
             postgres_db=os.getenv("POSTGRES_DB", "ozon_parser"),
             postgres_user=os.getenv("POSTGRES_USER", "ozon"),
             postgres_password=os.getenv("POSTGRES_PASSWORD") or None,
+            postgres_sslmode=os.getenv("POSTGRES_SSLMODE", "prefer"),
+            postgres_channel_binding=os.getenv(
+                "POSTGRES_CHANNEL_BINDING", "prefer"
+            ),
         )
 
     def require_ozon_phone(self) -> str:

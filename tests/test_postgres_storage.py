@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -209,6 +210,42 @@ def test_check_connection_executes_minimal_query() -> None:
         (CHECK_CONNECTION_SQL, None)
     ]
     assert connection.commits == 1
+
+
+def test_from_settings_passes_tls_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = FakeConnection()
+    captured: dict[str, Any] = {}
+
+    def fake_connect(**kwargs: Any) -> FakeConnection:
+        captured.update(kwargs)
+        return connection
+
+    monkeypatch.setattr("psycopg.connect", fake_connect)
+    settings = SimpleNamespace(
+        postgres_host="db.example.test",
+        postgres_port=5432,
+        postgres_db="neondb",
+        postgres_user="reader",
+        postgres_sslmode="require",
+        postgres_channel_binding="require",
+        require_postgres_password=lambda: "secret",
+    )
+
+    storage = PostgresProductStorage.from_settings(settings)
+
+    assert storage.connection is connection
+    assert captured == {
+        "host": "db.example.test",
+        "port": 5432,
+        "dbname": "neondb",
+        "user": "reader",
+        "password": "secret",
+        "sslmode": "require",
+        "channel_binding": "require",
+        "connect_timeout": 10,
+    }
 
 
 def test_find_existing_skus_uses_parameterized_query() -> None:

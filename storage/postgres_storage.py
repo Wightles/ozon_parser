@@ -159,6 +159,8 @@ class PostgresProductStorage:
                 dbname=settings.postgres_db,
                 user=settings.postgres_user,
                 password=settings.require_postgres_password(),
+                sslmode=settings.postgres_sslmode,
+                channel_binding=settings.postgres_channel_binding,
                 connect_timeout=10,
             )
         except Exception as exc:
