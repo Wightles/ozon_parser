@@ -140,7 +140,7 @@ def test_empty_save_does_not_open_transaction() -> None:
     assert connection.cursor_instance.executed_many == []
 
 
-def test_initialize_schema_executes_current_and_history_tables() -> None:
+def test_initialize_schema_executes_tables_and_datalens_views() -> None:
     connection = FakeConnection()
 
     PostgresProductStorage(connection).initialize_schema()
@@ -150,6 +150,8 @@ def test_initialize_schema_executes_current_and_history_tables() -> None:
     assert "CREATE TABLE IF NOT EXISTS products" in query
     assert "CREATE TABLE IF NOT EXISTS product_history" in query
     assert "idx_product_history_sku_parsed_at" in query
+    assert "CREATE OR REPLACE VIEW datalens_products" in query
+    assert "CREATE OR REPLACE VIEW datalens_product_history" in query
     assert params is None
 
 
