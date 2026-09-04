@@ -93,6 +93,7 @@ def run_configured_batch(
     settings: Settings,
     *,
     skus: Sequence[str] | None = None,
+    save_database: bool = True,
 ) -> BatchResult:
     """Run the complete CSV and PostgreSQL pipeline from shared settings."""
     from ozon_client import create_ozon_client
@@ -105,6 +106,10 @@ def run_configured_batch(
             client=client,
             output_path=output_path,
         )
+
+    if not save_database:
+        LOGGER.info("Skipping PostgreSQL save because CSV-only mode is enabled")
+        return result
 
     with PostgresProductStorage.from_settings(settings) as storage:
         storage.initialize_schema()
@@ -130,6 +135,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "comma-separated"
         ),
     )
+    parser.add_argument(
+        "--csv-only",
+        action="store_true",
+        help="write results/products.csv and skip PostgreSQL writes",
+    )
     return parser
 
 
@@ -153,7 +163,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     LOGGER.info("Starting Ozon product parser")
 
     try:
-        result = run_configured_batch(settings, skus=skus)
+        result = run_configured_batch(
+            settings,
+            skus=skus,
+            save_database=not args.csv_only,
+        )
     except OzonParserError as exc:
         LOGGER.error(
             "Ozon pipeline failed; any written CSV remains at %s: %s",

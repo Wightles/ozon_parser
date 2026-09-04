@@ -88,6 +88,12 @@ python3 main.py parse --sku 2359066702 --sku 2829800382
 python3 main.py parse --sku 2359066702,2829800382
 ```
 
+Разовый запуск только в CSV, без PostgreSQL:
+
+```bash
+python3 main.py parse --csv-only --sku 2359066702
+```
+
 Проверить Gmail OAuth:
 
 ```bash

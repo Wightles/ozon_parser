@@ -28,6 +28,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "comma-separated"
         ),
     )
+    parse_parser.add_argument(
+        "--csv-only",
+        action="store_true",
+        help="write results/products.csv and skip PostgreSQL writes",
+    )
 
     auth_parser = subparsers.add_parser(
         "auth",
@@ -100,6 +105,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         forwarded_args = []
         for sku in getattr(args, "sku", []):
             forwarded_args.extend(["--sku", sku])
+        if getattr(args, "csv_only", False):
+            forwarded_args.append("--csv-only")
         return _run_module_main("parse_ozon", forwarded_args)
 
     if args.command == "auth":
