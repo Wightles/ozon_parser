@@ -36,6 +36,7 @@ cp .env.example .env
 Заполните в `.env` как минимум:
 
 ```env
+OZON_SKUS=2359066702,2829800382
 OZON_PHONE=
 POSTGRES_PASSWORD=
 ```
@@ -61,6 +62,12 @@ POSTGRES_CHANNEL_BINDING=require
 
 ```bash
 python3 main.py
+```
+
+Чтобы поменять товары для парсинга, обновите список в `.env`:
+
+```env
+OZON_SKUS=2359066702,2829800382,123456789
 ```
 
 То же самое явно:

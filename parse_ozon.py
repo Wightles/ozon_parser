@@ -19,10 +19,6 @@ if TYPE_CHECKING:
 
 
 LOGGER = logging.getLogger(__name__)
-SKUS = [
-    "2359066702",
-    "2829800382",
-]
 CSV_FILENAME = "products.csv"
 
 
@@ -99,7 +95,7 @@ def run_configured_batch(settings: Settings) -> BatchResult:
     output_path = settings.results_dir / CSV_FILENAME
     with create_ozon_client(settings) as client:
         result = run_batch(
-            skus=SKUS,
+            skus=settings.ozon_skus,
             client=client,
             output_path=output_path,
         )

@@ -45,10 +45,30 @@ def _bool_from_env(name: str, default: bool) -> bool:
     raise ConfigurationError(f"{name} must be true or false")
 
 
+def _sku_list_from_env(name: str, default: str) -> tuple[str, ...]:
+    raw_value = os.getenv(name, default)
+    skus = tuple(
+        dict.fromkeys(
+            sku.strip()
+            for sku in raw_value.replace("\n", ",").split(",")
+            if sku.strip()
+        )
+    )
+    if not skus:
+        raise ConfigurationError(f"{name} must contain at least one SKU")
+    invalid_skus = [sku for sku in skus if not sku.isdigit()]
+    if invalid_skus:
+        raise ConfigurationError(
+            f"{name} contains invalid SKU values: {', '.join(invalid_skus)}"
+        )
+    return skus
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Runtime settings without validation tied to a specific entry point."""
 
+    ozon_skus: tuple[str, ...]
     ozon_phone: str | None
     cookies_path: Path
     ozon_login_url: str
@@ -82,6 +102,9 @@ class Settings:
         """Load settings from an optional dotenv file and the environment."""
         load_dotenv(dotenv_path=env_file or BASE_DIR / ".env")
         return cls(
+            ozon_skus=_sku_list_from_env(
+                "OZON_SKUS", "2359066702,2829800382"
+            ),
             ozon_phone=os.getenv("OZON_PHONE") or None,
             cookies_path=_path_from_env("COOKIES_PATH", "cookies.json"),
             ozon_login_url=os.getenv(
