@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from playwright.sync_api import (
+    BrowserContext,
     Error as PlaywrightError,
     Locator,
     Page,
@@ -51,6 +53,10 @@ LOGIN_ERROR_MARKERS = (
     "code is invalid",
     "incorrect code",
 )
+PUSH_APPROVAL_MARKERS = (
+    "код из пуш-уведомления",
+    "проверьте устройство, на котором вы авторизованы",
+)
 
 _PHONE_WORDS = ("phone", "tel", "телефон", "номер", "+7")
 _CODE_WORDS = (
@@ -72,9 +78,11 @@ _ACTION_WORDS: dict[ActionKind, tuple[str, ...]] = {
         "получить код",
         "отправить код",
         "продолжить",
+        "войти",
         "get code",
         "send code",
         "continue",
+        "sign in",
     ),
     "submit_code": (
         "подтвердить",
@@ -85,6 +93,12 @@ _ACTION_WORDS: dict[ActionKind, tuple[str, ...]] = {
         "sign in",
     ),
 }
+
+
+def is_ozon_hostname(hostname: str | None) -> bool:
+    """Return whether a hostname belongs to Ozon itself."""
+    normalized = (hostname or "").rstrip(".").casefold()
+    return normalized == "ozon.ru" or normalized.endswith(".ozon.ru")
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +142,15 @@ def normalize_phone(raw_phone: str) -> str:
     return normalized
 
 
+def phone_for_ozon_id(raw_phone: str) -> str:
+    """Return digits expected after Ozon ID's preselected Russian +7 code."""
+    normalized = normalize_phone(raw_phone)
+    digits = normalized.removeprefix("+")
+    if len(digits) == 11 and digits[0] in {"7", "8"}:
+        return digits[1:]
+    return digits
+
+
 def save_cookies(cookies: Sequence[Mapping[str, Any]], path: Path) -> None:
     """Serialize Playwright cookies without logging their contents."""
     if not cookies:
@@ -158,56 +181,121 @@ class OzonBrowserAuthenticator:
                 raise OzonLoginError(f"{name} must be greater than zero")
 
         login_url = urlparse(settings.ozon_login_url)
-        if login_url.scheme != "https" or login_url.hostname != "data.ozon.ru":
+        if login_url.scheme != "https" or not is_ozon_hostname(
+            login_url.hostname
+        ):
             raise OzonLoginError(
-                "OZON_LOGIN_URL must be an https://data.ozon.ru URL"
+                "OZON_LOGIN_URL must be an HTTPS URL on ozon.ru"
             )
 
         self.settings = settings
         self.gmail_client = gmail_client
 
-    def authorize(self) -> None:
+    def authorize(
+        self,
+        cdp_url: str | None = None,
+        *,
+        capture_only: bool = False,
+    ) -> None:
         """Run the browser login flow and persist the resulting cookies."""
-        phone = normalize_phone(self.settings.require_ozon_phone())
+        if capture_only and cdp_url is None:
+            raise OzonLoginError("--capture-only requires --cdp-url")
+        phone = (
+            None
+            if capture_only
+            else phone_for_ozon_id(self.settings.require_ozon_phone())
+        )
         LOGGER.info("Starting Ozon authorization")
 
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=self.settings.ozon_headless
-            )
-            context = browser.new_context(locale="ru-RU")
+            browser = None
+            owns_context = cdp_url is None
+            if cdp_url is None:
+                browser = playwright.chromium.launch(
+                    headless=self.settings.ozon_headless
+                )
+                context = browser.new_context(locale="ru-RU")
+                page = context.new_page()
+                open_login_page = True
+            else:
+                LOGGER.info("Connecting to an existing Chrome session")
+                browser = playwright.chromium.connect_over_cdp(cdp_url)
+                context, page = self._find_ozon_page(browser.contexts)
+                open_login_page = False
+
             context.set_default_timeout(
                 self.settings.ozon_navigation_timeout * 1000
             )
-            page = context.new_page()
             try:
-                self._open_login_page(page)
-                phone_input = self._wait_for_phone_input(page)
-                LOGGER.info("Ozon phone form detected")
-                phone_input.fill(phone)
-
-                requested_at = datetime.now(UTC)
-                self._request_verification_code(page, phone_input)
-                LOGGER.info("Verification code requested")
-
-                code_control = self._wait_for_code_control(page)
-                code = self.gmail_client.wait_for_verification_code(
-                    requested_at
-                )
-                self._fill_verification_code(page, code_control, code)
-                self._submit_verification_code(page, code_control)
-                self._wait_for_authorization(page)
-
-                cookies = context.cookies()
-                save_cookies(cookies, self.settings.cookies_path)
-                LOGGER.info("Authorization completed")
-                LOGGER.info("Cookies saved to %s", self.settings.cookies_path)
+                if capture_only:
+                    self._save_context_cookies(context)
+                else:
+                    if phone is None:
+                        raise OzonLoginError("Ozon phone number is unavailable")
+                    self._authorize_context(
+                        context,
+                        page,
+                        phone,
+                        open_login_page=open_login_page,
+                    )
             finally:
-                context.close()
-                browser.close()
+                if owns_context:
+                    context.close()
+                    browser.close()
+
+    @staticmethod
+    def _find_ozon_page(
+        contexts: Sequence[BrowserContext],
+    ) -> tuple[BrowserContext, Page]:
+        """Select an already-open Ozon tab without inspecting other pages."""
+        for context in contexts:
+            for page in context.pages:
+                if is_ozon_hostname(urlparse(page.url).hostname):
+                    return context, page
+        raise OzonLoginError(
+            "The connected Chrome session has no open Ozon tab"
+        )
+
+    def _authorize_context(
+        self,
+        context: BrowserContext,
+        page: Page,
+        phone: str,
+        *,
+        open_login_page: bool,
+    ) -> None:
+        if open_login_page:
+            self._open_login_page(page)
+
+        phone_input = self._wait_for_phone_input(page)
+        LOGGER.info("Ozon phone form detected")
+        phone_input.fill(phone)
+
+        requested_at = datetime.now(UTC)
+        self._request_verification_code(page, phone_input)
+        LOGGER.info("Verification code requested")
+
+        code_controls = self._wait_for_code_control(page)
+        if code_controls:
+            code = self.gmail_client.wait_for_verification_code(requested_at)
+            self._fill_verification_code(page, code_controls, code)
+            self._submit_verification_code(page, code_controls)
+        self._wait_for_authorization(page)
+
+        self._save_context_cookies(context)
+
+    def _save_context_cookies(self, context: BrowserContext) -> None:
+        cookies = [
+            cookie
+            for cookie in context.cookies()
+            if is_ozon_hostname(str(cookie.get("domain", "")).lstrip("."))
+        ]
+        save_cookies(cookies, self.settings.cookies_path)
+        LOGGER.info("Authorization completed")
+        LOGGER.info("Cookies saved to %s", self.settings.cookies_path)
 
     def _open_login_page(self, page: Page) -> None:
-        LOGGER.info("Opening data.ozon.ru")
+        LOGGER.info("Opening Ozon login page")
         try:
             page.goto(
                 self.settings.ozon_login_url,
@@ -221,7 +309,7 @@ class OzonBrowserAuthenticator:
                 self._wait_for_manual_captcha(page)
                 return
             raise OzonLoginError(
-                "Timed out while opening data.ozon.ru"
+                "Timed out while opening the Ozon login page"
             ) from None
         except PlaywrightError as exc:
             message = str(exc).casefold()
@@ -230,7 +318,7 @@ class OzonBrowserAuthenticator:
                     "Ozon returned a protective redirect loop. Retry in a visible "
                     "browser from a network accepted by Ozon."
                 ) from exc
-            raise OzonLoginError("Cannot open data.ozon.ru") from exc
+            raise OzonLoginError("Cannot open the Ozon login page") from exc
 
     def _wait_for_phone_input(self, page: Page) -> Locator:
         deadline = time.monotonic() + self.settings.ozon_login_timeout
@@ -273,6 +361,10 @@ class OzonBrowserAuthenticator:
             code_controls = self._find_code_controls(page)
             if code_controls:
                 return code_controls
+            page_text = self._page_text(page).casefold()
+            if any(marker in page_text for marker in PUSH_APPROVAL_MARKERS):
+                self._wait_for_push_approval(page)
+                return []
             if self._captcha_present(page):
                 self._wait_for_manual_captcha(page)
                 continue
@@ -325,13 +417,14 @@ class OzonBrowserAuthenticator:
                 successful_observations = 0
                 continue
 
-            hostname = urlparse(page.url).hostname or ""
+            hostname = urlparse(page.url).hostname
             code_controls = self._find_code_controls(page)
             phone_input = self._find_input(page, "phone")
             looks_authorized = (
-                hostname == "data.ozon.ru"
+                is_ozon_hostname(hostname)
                 and not code_controls
                 and phone_input is None
+                and not self._login_frame_visible(page)
                 and bool(page_text.strip())
             )
             successful_observations = (
@@ -344,6 +437,43 @@ class OzonBrowserAuthenticator:
         raise OzonLoginError(
             "Ozon authorization did not complete before the timeout"
         )
+
+    def _wait_for_push_approval(self, page: Page) -> None:
+        if self.settings.ozon_headless:
+            raise OzonLoginError(
+                "Ozon requires confirmation in the mobile app; rerun with "
+                "OZON_HEADLESS=false"
+            )
+
+        LOGGER.warning(
+            "Ozon requires confirmation in the mobile app. Approve the login "
+            "within %.0f seconds.",
+            self.settings.ozon_manual_timeout,
+        )
+        deadline = time.monotonic() + self.settings.ozon_manual_timeout
+        while time.monotonic() < deadline:
+            if not self._login_frame_visible(page):
+                LOGGER.info("Ozon mobile-app confirmation completed")
+                return
+            page.wait_for_timeout(1000)
+        raise OzonLoginError(
+            "Ozon mobile-app confirmation was not completed before the timeout"
+        )
+
+    @staticmethod
+    def _login_frame_visible(page: Page) -> bool:
+        for frame in page.frames:
+            parsed = urlparse(frame.url)
+            if not is_ozon_hostname(parsed.hostname):
+                continue
+            if parsed.path != "/ozonid-lite":
+                continue
+            try:
+                if frame.locator("body").is_visible(timeout=1000):
+                    return True
+            except (PlaywrightError, PlaywrightTimeoutError):
+                continue
+        return False
 
     def _wait_for_manual_captcha(self, page: Page) -> None:
         if self.settings.ozon_headless:
@@ -368,10 +498,10 @@ class OzonBrowserAuthenticator:
         )
 
     def _find_input(self, page: Page, kind: InputKind) -> Locator | None:
-        inputs, metadata = self._visible_inputs(page)
+        inputs = self._visible_inputs(page)
         scored = [
-            (self._input_score(item, kind), item.index)
-            for item in metadata
+            (self._input_score(item, kind), index, control)
+            for index, (control, item) in enumerate(inputs)
             if not item.disabled and not item.read_only
         ]
         scored = [candidate for candidate in scored if candidate[0] >= 40]
@@ -380,17 +510,17 @@ class OzonBrowserAuthenticator:
         scored.sort(reverse=True)
         if len(scored) > 1 and scored[0][0] == scored[1][0]:
             return None
-        return inputs.nth(scored[0][1])
+        return scored[0][2]
 
     def _find_code_controls(self, page: Page) -> list[Locator]:
-        inputs, metadata = self._visible_inputs(page)
+        inputs = self._visible_inputs(page)
         single_input = self._find_input(page, "code")
         if single_input is not None:
             return [single_input]
 
-        split_indexes = [
-            item.index
-            for item in metadata
+        split_controls = [
+            control
+            for control, item in inputs
             if not item.disabled
             and not item.read_only
             and item.max_length == 1
@@ -399,8 +529,8 @@ class OzonBrowserAuthenticator:
                 or item.type in {"number", "tel", "text"}
             )
         ]
-        if 4 <= len(split_indexes) <= 8:
-            return [inputs.nth(index) for index in split_indexes]
+        if 4 <= len(split_controls) <= 8:
+            return split_controls
         return []
 
     @staticmethod
@@ -430,62 +560,85 @@ class OzonBrowserAuthenticator:
         return score
 
     def _find_action(self, page: Page, kind: ActionKind) -> Locator | None:
-        controls = page.locator(
+        controls = self._visible_controls(
+            page,
             'button:visible, [role="button"]:visible, '
-            'input[type="submit"]:visible'
+            'input[type="submit"]:visible',
         )
-        metadata = self._control_metadata(controls)
-        scored: list[tuple[int, int]] = []
-        for item in metadata:
+        scored: list[tuple[int, int, Locator]] = []
+        for index, (control, item) in enumerate(controls):
             if item.disabled:
                 continue
             normalized_text = item.searchable_text
+            visible_text = item.text.strip().casefold()
             score = max(
                 (
-                    100 - position
+                    200 - position
+                    if visible_text == word
+                    else 100 - position
                     for position, word in enumerate(_ACTION_WORDS[kind])
                     if word in normalized_text
                 ),
                 default=0,
             )
             if score:
-                scored.append((score, item.index))
+                scored.append((score, index, control))
 
         if not scored:
-            enabled = [item.index for item in metadata if not item.disabled]
-            return controls.nth(enabled[0]) if len(enabled) == 1 else None
+            enabled = [
+                control for control, item in controls if not item.disabled
+            ]
+            return enabled[0] if len(enabled) == 1 else None
         scored.sort(reverse=True)
         if len(scored) > 1 and scored[0][0] == scored[1][0]:
             return None
-        return controls.nth(scored[0][1])
+        return scored[0][2]
 
     def _visible_inputs(
         self, page: Page
-    ) -> tuple[Locator, list[ControlMetadata]]:
-        inputs = page.locator("input:visible")
-        return inputs, self._control_metadata(inputs)
+    ) -> list[tuple[Locator, ControlMetadata]]:
+        return self._visible_controls(page, "input:visible")
+
+    def _visible_controls(
+        self, page: Page, selector: str
+    ) -> list[tuple[Locator, ControlMetadata]]:
+        found: list[tuple[Locator, ControlMetadata]] = []
+        for frame in page.frames:
+            controls = frame.locator(selector)
+            metadata = self._control_metadata(controls)
+            found.extend(
+                (controls.nth(item.index), item)
+                for item in metadata
+                if item.index >= 0
+            )
+        return found
 
     @staticmethod
     def _control_metadata(controls: Locator) -> list[ControlMetadata]:
-        raw_items = controls.evaluate_all(
-            """
-            elements => elements.map((element, index) => ({
-                index,
-                type: element.getAttribute('type') || '',
-                name: element.getAttribute('name') || '',
-                placeholder: element.getAttribute('placeholder') || '',
-                ariaLabel: element.getAttribute('aria-label') || '',
-                autocomplete: element.getAttribute('autocomplete') || '',
-                inputMode: element.getAttribute('inputmode') || '',
-                maxLength: Number.isFinite(element.maxLength) ?
-                    element.maxLength : -1,
-                text: element.innerText || element.value || '',
-                disabled: Boolean(element.disabled) ||
-                    element.getAttribute('aria-disabled') === 'true',
-                readOnly: Boolean(element.readOnly),
-            }))
-            """
-        )
+        try:
+            raw_items = controls.evaluate_all(
+                """
+                elements => elements.map((element, index) => ({
+                    index,
+                    type: element.getAttribute('type') || '',
+                    name: element.getAttribute('name') || '',
+                    placeholder: element.getAttribute('placeholder') || '',
+                    ariaLabel: element.getAttribute('aria-label') || '',
+                    autocomplete: element.getAttribute('autocomplete') || '',
+                    inputMode: element.getAttribute('inputmode') || '',
+                    maxLength: Number.isFinite(element.maxLength) ?
+                        element.maxLength : -1,
+                    text: element.innerText || element.value || '',
+                    disabled: Boolean(element.disabled) ||
+                        element.getAttribute('aria-disabled') === 'true',
+                    readOnly: Boolean(element.readOnly),
+                }))
+                """
+            )
+        except PlaywrightError:
+            # Ozon redirects during login; the polling loop will inspect the
+            # controls again after Playwright creates the new page context.
+            return []
         if not isinstance(raw_items, list):
             return []
 
@@ -521,18 +674,20 @@ class OzonBrowserAuthenticator:
 
     @staticmethod
     def _page_text(page: Page) -> str:
-        try:
-            return page.locator("body").inner_text(timeout=2000)
-        except (PlaywrightError, PlaywrightTimeoutError):
-            return ""
+        texts: list[str] = []
+        for frame in page.frames:
+            try:
+                texts.append(frame.locator("body").inner_text(timeout=2000))
+            except (PlaywrightError, PlaywrightTimeoutError):
+                continue
+        return "\n".join(texts)
 
     def _log_control_diagnostics(self, page: Page) -> None:
-        _, inputs = self._visible_inputs(page)
-        buttons = self._control_metadata(
-            page.locator(
-                'button:visible, [role="button"]:visible, '
-                'input[type="submit"]:visible'
-            )
+        inputs = self._visible_inputs(page)
+        buttons = self._visible_controls(
+            page,
+            'button:visible, [role="button"]:visible, '
+            'input[type="submit"]:visible',
         )
         LOGGER.error(
             "Login DOM diagnostics: url=%s visible_inputs=%d visible_buttons=%d",
@@ -542,7 +697,28 @@ class OzonBrowserAuthenticator:
         )
 
 
+def build_argument_parser() -> argparse.ArgumentParser:
+    """Build the command-line interface for browser authorization."""
+    parser = argparse.ArgumentParser(
+        description="Authorize in Ozon and save browser cookies."
+    )
+    parser.add_argument(
+        "--cdp-url",
+        help=(
+            "connect to an already-running Chrome DevTools endpoint, for "
+            "example http://127.0.0.1:9223"
+        ),
+    )
+    parser.add_argument(
+        "--capture-only",
+        action="store_true",
+        help="save Ozon cookies from an already-authorized CDP session",
+    )
+    return parser
+
+
 def main() -> int:
+    args = build_argument_parser().parse_args()
     try:
         settings = get_settings()
     except OzonParserError as exc:
@@ -554,7 +730,10 @@ def main() -> int:
     try:
         gmail_client = GmailClient.from_settings(settings)
         authenticator = OzonBrowserAuthenticator(settings, gmail_client)
-        authenticator.authorize()
+        authenticator.authorize(
+            cdp_url=args.cdp_url,
+            capture_only=args.capture_only,
+        )
     except OzonParserError as exc:
         LOGGER.error("Ozon authorization failed: %s", exc)
         return 1

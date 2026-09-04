@@ -1,6 +1,7 @@
 # Исследование embedded JSON Ozon
 
-Дата исследования: 1 сентября 2026 года. Тестовый SKU: `2359066702`.
+Дата первоначального исследования: 1 сентября 2026 года. Сквозная проверка на
+реальных SKU `2359066702` и `2829800382`: 4 сентября 2026 года.
 
 ## Подтверждённые блоки
 
@@ -9,8 +10,9 @@
   `brand`, `offers.price`, `offers.priceCurrency`, `aggregateRating.ratingValue`,
   `aggregateRating.reviewCount`, `offers.url`, `image` и `description`.
 - `div[id^="state-"][data-state]` с JSON в HTML-атрибуте. Опубликованные примеры
-  Ozon подтверждают, в частности, контейнер `state-webPrice-*`. Extractor декодирует
-  такие контейнеры универсально, но пока не связывает их поля с моделью товара.
+  Ozon и сквозная проверка подтвердили контейнеры `state-webGallery-*` и
+  `state-webShortCharacteristics-*`. Парсер использует их для галереи, видео,
+  цвета, материала и артикула, когда соответствующая характеристика присутствует.
 
 Подтверждённые источники основных данных:
 
@@ -20,28 +22,35 @@
 | price | JSON-LD `offers.price` | подтверждён |
 | rating | JSON-LD `aggregateRating.ratingValue` | подтверждён |
 | reviews | JSON-LD `aggregateRating.reviewCount` | подтверждён |
-| gallery / cover | JSON-LD `image` | подтверждён |
+| gallery / cover | `state-webGallery-*` (`images`, `coverImage`) с fallback на JSON-LD `image` | подтверждён |
+| seller videos | `state-webGallery-*` (`videos`) | подтверждён |
 | description | JSON-LD `description` | подтверждён |
-| characteristics | — | не подтверждён для тестового SKU |
-| rich content | — | не подтверждён для тестового SKU |
+| characteristics | `state-webShortCharacteristics-*` (`characteristics`) | подтверждён |
+| rich content | структурный HTML в JSON-LD `description` | подтверждён; отсутствует у двух проверенных SKU |
 
 Extractor намеренно не разбирает произвольный JavaScript и не предполагает наличие
 `__NEXT_DATA__`, `widgetStates` либо других неподтверждённых контейнеров в HTML.
 
-## Что не удалось подтвердить
+## Ограничения подтверждённых данных
 
-В рабочем каталоге отсутствует `cookies.json`, а публичный запрос точной карточки
-SKU попадает в цикл редиректов Ozon. Поэтому расположение gallery,
-characteristics и rich content именно для SKU `2359066702` пока не подтверждено.
-Эти пути должны быть добавлены только после получения страницы с авторизованной
-сессией.
+Ozon отдаёт только краткий набор характеристик в исходном `data-state`. Если
+`Артикул`, `Артикул производителя` или `Комплектация` в нём отсутствуют, поле
+`art_set` остаётся `NULL`. Парсер не угадывает значение и не разбирает произвольный
+JavaScript. У двух проверенных SKU поле `art_set` отсутствует.
+
+Обычный HTTP-запрос с валидными cookies был отклонён Ozon кодом 403. Для локальной
+сквозной проверки использовался явно настроенный транспорт через уже
+авторизованный обычный Chrome на loopback-CDP. CAPTCHA и другие защитные проверки
+не обходятся: их выполняет пользователь в браузере.
 
 ## Локальная проверка
 
-После создания cookies:
+После запуска Chrome с локальным DevTools endpoint и создания cookies:
 
 ```bash
-python inspect_embedded_json.py 2359066702
+python get_cookies.py --cdp-url http://127.0.0.1:9223
+OZON_CDP_URL=http://127.0.0.1:9223 python inspect_embedded_json.py 2359066702
+OZON_CDP_URL=http://127.0.0.1:9223 python parse_ozon.py
 ```
 
 Для уже сохранённой страницы:

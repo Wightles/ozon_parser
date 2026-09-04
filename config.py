@@ -52,6 +52,7 @@ class Settings:
     ozon_phone: str | None
     cookies_path: Path
     ozon_login_url: str
+    ozon_cdp_url: str | None
     ozon_headless: bool
     ozon_navigation_timeout: float
     ozon_login_timeout: float
@@ -84,8 +85,9 @@ class Settings:
             ozon_phone=os.getenv("OZON_PHONE") or None,
             cookies_path=_path_from_env("COOKIES_PATH", "cookies.json"),
             ozon_login_url=os.getenv(
-                "OZON_LOGIN_URL", "https://data.ozon.ru/"
+                "OZON_LOGIN_URL", "https://www.ozon.ru/"
             ),
+            ozon_cdp_url=os.getenv("OZON_CDP_URL") or None,
             ozon_headless=_bool_from_env("OZON_HEADLESS", False),
             ozon_navigation_timeout=_float_from_env(
                 "OZON_NAVIGATION_TIMEOUT", 30.0

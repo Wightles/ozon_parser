@@ -6,6 +6,8 @@ import argparse
 import json
 import logging
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Mapping
 from html.parser import HTMLParser
@@ -17,7 +19,6 @@ import requests
 from requests import Response, Session
 from requests.exceptions import (
     ConnectionError as RequestsConnectionError,
-    HTTPError,
     RequestException,
     Timeout,
     TooManyRedirects,
@@ -58,6 +59,7 @@ LOGIN_TEXT_MARKERS = (
     "sign in to ozon",
 )
 ANTI_BOT_TEXT_MARKERS = (
+    "похоже, нет соединения",
     "доступ ограничен",
     "подтвердите, что вы не робот",
     "проверка безопасности",
@@ -131,6 +133,12 @@ def normalize_sku(raw_sku: str) -> str:
     if not re.fullmatch(r"[0-9]+", sku):
         raise ProductPageError("Ozon SKU must contain digits only")
     return sku
+
+
+def is_ozon_hostname(hostname: str | None) -> bool:
+    """Return whether a hostname belongs to Ozon itself."""
+    normalized = (hostname or "").rstrip(".").casefold()
+    return normalized == "ozon.ru" or normalized.endswith(".ozon.ru")
 
 
 def load_cookies(path: Path) -> list[dict[str, Any]]:
@@ -325,66 +333,188 @@ class OzonClient:
 
     @staticmethod
     def _validate_response(response: Response, sku: str) -> None:
-        visible_text = visible_page_text(response.text).casefold()
-
-        if response.status_code == 404 or any(
-            marker in visible_text for marker in NOT_FOUND_TEXT_MARKERS
-        ):
-            raise ProductNotFoundError(f"Ozon product was not found for SKU {sku}")
-        if response.status_code == 429 or any(
-            marker in visible_text for marker in ANTI_BOT_TEXT_MARKERS
-        ):
-            raise OzonAntiBotError(
-                "Ozon anti-bot or rate-limit page was returned. Retry later "
-                "without attempting to bypass the protection."
-            )
-
-        final_url = urlparse(response.url)
-        path = final_url.path.casefold()
-        if final_url.hostname == "id.ozon.ru" or any(
-            marker in path for marker in LOGIN_URL_MARKERS
-        ):
-            raise CookiesExpiredError(
-                "Ozon redirected to a login page. Run get_cookies.py again."
-            )
-        login_marker_count = sum(
-            marker in visible_text for marker in LOGIN_TEXT_MARKERS
+        validate_product_document(
+            status_code=response.status_code,
+            url=response.url,
+            content_type=response.headers.get("Content-Type", ""),
+            html=response.text,
+            sku=sku,
         )
-        if (
-            LOGIN_TEXT_MARKERS[0] in visible_text
-            or login_marker_count >= 2
-        ):
+
+
+def validate_product_document(
+    *,
+    status_code: int,
+    url: str,
+    content_type: str,
+    html: str,
+    sku: str,
+) -> None:
+    """Validate product HTML received by either supported transport."""
+    visible_text = visible_page_text(html).casefold()
+
+    if status_code == 404 or any(
+        marker in visible_text for marker in NOT_FOUND_TEXT_MARKERS
+    ):
+        raise ProductNotFoundError(f"Ozon product was not found for SKU {sku}")
+    if status_code == 429 or any(
+        marker in visible_text for marker in ANTI_BOT_TEXT_MARKERS
+    ):
+        raise OzonAntiBotError(
+            "Ozon anti-bot or rate-limit page was returned. Retry later "
+            "without attempting to bypass the protection."
+        )
+
+    final_url = urlparse(url)
+    path = final_url.path.casefold()
+    if final_url.hostname == "id.ozon.ru" or any(
+        marker in path for marker in LOGIN_URL_MARKERS
+    ):
+        raise CookiesExpiredError(
+            "Ozon redirected to a login page. Run get_cookies.py again."
+        )
+    login_marker_count = sum(
+        marker in visible_text for marker in LOGIN_TEXT_MARKERS
+    )
+    if LOGIN_TEXT_MARKERS[0] in visible_text or login_marker_count >= 2:
+        raise CookiesExpiredError(
+            "Ozon returned a login page. Run get_cookies.py again."
+        )
+
+    if status_code >= 400:
+        if status_code == 401:
             raise CookiesExpiredError(
-                "Ozon returned a login page. Run get_cookies.py again."
+                "Ozon rejected the authenticated session. Refresh cookies."
+            )
+        if status_code == 403:
+            raise OzonAntiBotError(
+                "Ozon rejected the non-browser HTTP transport. Use an "
+                "authorized local Chrome session without bypassing protection."
+            )
+        raise ProductPageError(
+            f"Ozon returned HTTP {status_code} for SKU {sku}"
+        )
+
+    if not is_ozon_hostname(final_url.hostname):
+        raise ProductPageError(
+            f"Ozon request ended on an unexpected host for SKU {sku}"
+        )
+    if "/product/" not in path or sku not in path:
+        raise ProductPageError(
+            f"Ozon returned an unexpected page for SKU {sku}"
+        )
+    if "text/html" not in content_type.casefold():
+        raise ProductPageError(
+            f"Ozon returned non-HTML content for SKU {sku}"
+        )
+    if not html.strip():
+        raise ProductPageError(f"Ozon returned an empty page for SKU {sku}")
+
+
+class OzonBrowserClient:
+    """Download product HTML through an already-authorized local Chrome."""
+
+    def __init__(self, cdp_url: str, *, navigation_timeout: float) -> None:
+        if not cdp_url.strip():
+            raise ProductPageError("OZON_CDP_URL must not be empty")
+        if navigation_timeout <= 0:
+            raise ProductPageError("Browser timeout must be greater than zero")
+
+        parsed_cdp_url = urlparse(cdp_url.strip())
+        if (
+            parsed_cdp_url.scheme != "http"
+            or parsed_cdp_url.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed_cdp_url.port is None
+        ):
+            raise ProductPageError(
+                "OZON_CDP_URL must be an HTTP endpoint on the local computer"
+            )
+
+        self.cdp_url = cdp_url.strip()
+        self.navigation_timeout = navigation_timeout
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> OzonBrowserClient:
+        if settings.ozon_cdp_url is None:
+            raise ProductPageError("OZON_CDP_URL is not configured")
+        return cls(
+            settings.ozon_cdp_url,
+            navigation_timeout=settings.ozon_navigation_timeout,
+        )
+
+    def __enter__(self) -> OzonBrowserClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Keep the user's independently launched Chrome window open."""
+
+    def get_product_html(self, sku: str) -> str:
+        normalized_sku = normalize_sku(sku)
+        url = PRODUCT_URL_TEMPLATE.format(sku=normalized_sku)
+        LOGGER.info(
+            "Fetching Ozon product page for SKU %s through Chrome",
+            normalized_sku,
+        )
+        worker_path = Path(__file__).with_name("browser_fetch_worker.py")
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(worker_path),
+                    "--cdp-url",
+                    self.cdp_url,
+                    "--url",
+                    url,
+                    "--timeout",
+                    str(self.navigation_timeout),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.navigation_timeout + 15,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ProductPageError(
+                f"Ozon browser request timed out for SKU {normalized_sku}"
+            ) from exc
+        if completed.returncode != 0:
+            raise ProductPageError(
+                f"Ozon browser request failed for SKU {normalized_sku}"
             )
 
         try:
-            response.raise_for_status()
-        except HTTPError as exc:
-            if response.status_code in {401, 403}:
-                raise CookiesExpiredError(
-                    "Ozon rejected the authenticated session. Refresh cookies."
-                ) from exc
+            payload = json.loads(completed.stdout)
+            status_code = int(payload["status_code"])
+            final_url = str(payload["url"])
+            content_type = str(payload["content_type"])
+            html = str(payload["html"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ProductPageError(
-                f"Ozon returned HTTP {response.status_code} for SKU {sku}"
+                f"Ozon browser returned an invalid response for SKU {normalized_sku}"
             ) from exc
 
-        hostname = (final_url.hostname or "").casefold()
-        content_type = response.headers.get("Content-Type", "").casefold()
-        if hostname not in {"ozon.ru", "www.ozon.ru"}:
-            raise ProductPageError(
-                f"Ozon request ended on an unexpected host for SKU {sku}"
-            )
-        if "/product/" not in path or sku not in path:
-            raise ProductPageError(
-                f"Ozon returned an unexpected page for SKU {sku}"
-            )
-        if "text/html" not in content_type:
-            raise ProductPageError(
-                f"Ozon returned non-HTML content for SKU {sku}"
-            )
-        if not response.text.strip():
-            raise ProductPageError(f"Ozon returned an empty page for SKU {sku}")
+        validate_product_document(
+            status_code=status_code,
+            url=final_url,
+            content_type=content_type,
+            html=html,
+            sku=normalized_sku,
+        )
+        LOGGER.info(
+            "Ozon product page received for SKU %s through Chrome",
+            normalized_sku,
+        )
+        return html
+
+
+def create_ozon_client(settings: Settings) -> OzonClient | OzonBrowserClient:
+    """Choose the explicit browser transport when a CDP URL is configured."""
+    if settings.ozon_cdp_url:
+        return OzonBrowserClient.from_settings(settings)
+    return OzonClient.from_settings(settings)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -411,7 +541,7 @@ def main() -> int:
 
     configure_logging(settings.log_level)
     try:
-        with OzonClient.from_settings(settings) as client:
+        with create_ozon_client(settings) as client:
             html = client.get_product_html(args.sku)
     except OzonParserError as exc:
         LOGGER.error("Ozon HTTP diagnostic failed: %s", exc)

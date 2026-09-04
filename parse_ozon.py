@@ -94,10 +94,10 @@ def run_batch(
 
 def run_configured_batch(settings: Settings) -> BatchResult:
     """Run the complete CSV and PostgreSQL pipeline from shared settings."""
-    from ozon_client import OzonClient
+    from ozon_client import create_ozon_client
 
     output_path = settings.results_dir / CSV_FILENAME
-    with OzonClient.from_settings(settings) as client:
+    with create_ozon_client(settings) as client:
         result = run_batch(
             skus=SKUS,
             client=client,

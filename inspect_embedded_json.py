@@ -10,7 +10,7 @@ from typing import Any
 
 from config import get_settings
 from logging_config import configure_logging
-from ozon_client import OzonClient
+from ozon_client import create_ozon_client
 from parsers.embedded_json import (
     EmbeddedJsonBlock,
     extract_embedded_json,
@@ -107,7 +107,7 @@ def main() -> int:
         if args.html is not None:
             html = args.html.read_text(encoding="utf-8")
         else:
-            with OzonClient.from_settings(settings) as client:
+            with create_ozon_client(settings) as client:
                 html = client.get_product_html(args.sku)
         inspect_html(html, sku=args.sku)
     except (OSError, UnicodeError, OzonParserError) as exc:

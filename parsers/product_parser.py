@@ -11,7 +11,11 @@ from html.parser import HTMLParser
 from typing import Any
 
 from models.product import Product
-from parsers.embedded_json import extract_embedded_json, find_json_ld_product
+from parsers.embedded_json import (
+    EmbeddedJsonBlock,
+    extract_embedded_json,
+    find_json_ld_product,
+)
 from utils.exceptions import ProductParseError
 
 
@@ -247,6 +251,77 @@ def _image_urls(value: Any) -> list[str]:
     return urls
 
 
+def _find_data_state(
+    blocks: Iterable[EmbeddedJsonBlock], identifier_prefix: str
+) -> Mapping[str, Any] | None:
+    for block in blocks:
+        if (
+            block.source == "data-state"
+            and (block.identifier or "").startswith(identifier_prefix)
+            and isinstance(block.data, Mapping)
+        ):
+            return block.data
+    return None
+
+
+def _gallery_image_urls(gallery: Mapping[str, Any] | None) -> list[str]:
+    if gallery is None or not isinstance(gallery.get("images"), list):
+        return []
+    return _image_urls(
+        [
+            item.get("src")
+            for item in gallery["images"]
+            if isinstance(item, Mapping)
+        ]
+    )
+
+
+def _gallery_video_count(gallery: Mapping[str, Any] | None) -> int:
+    if gallery is None or not isinstance(gallery.get("videos"), list):
+        return 0
+    urls = _image_urls(
+        [
+            item.get("url")
+            for item in gallery["videos"]
+            if isinstance(item, Mapping)
+        ]
+    )
+    return len(urls)
+
+
+def _short_characteristics(
+    state: Mapping[str, Any] | None,
+) -> list[Characteristic]:
+    if state is None or not isinstance(state.get("characteristics"), list):
+        return []
+
+    result: list[Characteristic] = []
+    for item in state["characteristics"]:
+        if not isinstance(item, Mapping):
+            continue
+        title = item.get("title")
+        text_runs = title.get("textRs") if isinstance(title, Mapping) else None
+        if not isinstance(text_runs, list):
+            continue
+        name = "".join(
+            str(run.get("content", ""))
+            for run in text_runs
+            if isinstance(run, Mapping)
+        ).strip()
+        values = item.get("values")
+        if not name or not isinstance(values, list):
+            continue
+        value_parts = [
+            str(value.get("text", "")).strip(" ,")
+            for value in values
+            if isinstance(value, Mapping)
+            and str(value.get("text", "")).strip(" ,")
+        ]
+        if value_parts:
+            result.append((name, value_parts))
+    return result
+
+
 class ProductParser:
     """Parse the confirmed schema.org Product node from an Ozon HTML page."""
 
@@ -286,8 +361,25 @@ class ProductParser:
 
         offer = _first_offer(product_data.get("offers"))
         aggregate_rating = _mapping(product_data.get("aggregateRating"))
-        images = _image_urls(product_data.get("image"))
+        json_ld_images = _image_urls(product_data.get("image"))
         description = product_data.get("description")
+        gallery = _find_data_state(extraction.blocks, "state-webGallery-")
+        gallery_images = _gallery_image_urls(gallery)
+        images = gallery_images or json_ld_images
+        state_characteristics = _short_characteristics(
+            _find_data_state(
+                extraction.blocks,
+                "state-webShortCharacteristics-",
+            )
+        )
+        available_characteristics = (
+            characteristics
+            if characteristics is not None
+            else state_characteristics
+        )
+        gallery_cover = (
+            _optional_text(gallery.get("coverImage")) if gallery else None
+        )
 
         return Product(
             sku=normalized_sku,
@@ -303,12 +395,18 @@ class ProductParser:
                 if aggregate_rating
                 else None
             ),
-            cover_image=images[0] if images else None,
+            cover_image=gallery_cover or (images[0] if images else None),
             photos_seller=len(images),
-            videos_seller=0,
-            color=find_characteristic(characteristics, COLOR_NAMES),
-            material=find_characteristic(characteristics, MATERIAL_NAMES),
-            art_set=find_characteristic(characteristics, ART_SET_NAMES),
+            videos_seller=_gallery_video_count(gallery),
+            color=find_characteristic(available_characteristics, COLOR_NAMES),
+            material=find_characteristic(
+                available_characteristics,
+                MATERIAL_NAMES,
+            ),
+            art_set=find_characteristic(
+                available_characteristics,
+                ART_SET_NAMES,
+            ),
             has_rich_content=has_rich_content(description),
             parsed_at=parsed_at or datetime.now(timezone.utc),
         )

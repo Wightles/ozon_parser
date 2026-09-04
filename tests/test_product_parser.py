@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+import json
 from datetime import datetime
 from decimal import Decimal
 
@@ -56,6 +58,53 @@ def test_optional_fields_do_not_break_parser() -> None:
     assert product.cover_image is None
     assert product.photos_seller == 0
     assert product.has_rich_content is False
+
+
+def test_parses_gallery_and_short_characteristic_states(
+    product_json_ld_html: str,
+) -> None:
+    gallery = {
+        "coverImage": "https://cdn.example/state-cover.jpg",
+        "images": [
+            {"src": "https://cdn.example/state-cover.jpg"},
+            {"src": "https://cdn.example/state-gallery.jpg"},
+        ],
+        "videos": [{"url": "https://cdn.example/video.mp4"}],
+    }
+    characteristics = {
+        "characteristics": [
+            {
+                "title": {"textRs": [{"content": "Цвет"}]},
+                "values": [{"text": "Темно-розовый"}],
+            },
+            {
+                "title": {"textRs": [{"content": "Материал"}]},
+                "values": [{"text": "Бумага"}],
+            },
+            {
+                "title": {"textRs": [{"content": "Артикул"}]},
+                "values": [{"text": "ABC-123"}],
+            },
+        ]
+    }
+    states = (
+        '<div id="state-webGallery-test" data-state="'
+        f"{html.escape(json.dumps(gallery), quote=True)}"
+        '"></div>'
+        '<div id="state-webShortCharacteristics-test" data-state="'
+        f"{html.escape(json.dumps(characteristics), quote=True)}"
+        '"></div>'
+    )
+    source = product_json_ld_html.replace("</body>", f"{states}</body>")
+
+    product = ProductParser().parse(source, "2359066702")
+
+    assert product.cover_image == "https://cdn.example/state-cover.jpg"
+    assert product.photos_seller == 2
+    assert product.videos_seller == 1
+    assert product.color == "Темно-розовый"
+    assert product.material == "Бумага"
+    assert product.art_set == "ABC-123"
 
 
 def test_missing_product_json_raises_clear_error() -> None:
