@@ -89,6 +89,21 @@ def test_gmail_command_forwards_diagnostic_arguments(
     ]
 
 
+def test_doctor_command_forwards_healthcheck_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_run_module_main(module_name: str, argv: list[str]) -> int:
+        calls.append((module_name, tuple(argv)))
+        return 0
+
+    monkeypatch.setattr(cli, "_run_module_main", fake_run_module_main)
+
+    assert cli.main(["doctor", "--skip-database"]) == 0
+    assert calls == [("healthcheck", ("--skip-database",))]
+
+
 def test_module_runner_restores_sys_argv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

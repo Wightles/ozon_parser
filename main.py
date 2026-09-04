@@ -58,6 +58,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="override GMAIL_TIMEOUT for this diagnostic run",
     )
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="check local files and PostgreSQL without parsing Ozon pages",
+    )
+    doctor_parser.add_argument(
+        "--skip-database",
+        action="store_true",
+        help="skip PostgreSQL connectivity and schema checks",
+    )
     return parser
 
 
@@ -99,6 +109,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.timeout is not None:
             forwarded_args.extend(["--timeout", str(args.timeout)])
         return _run_module_main("gmail_client", forwarded_args)
+
+    if args.command == "doctor":
+        forwarded_args = []
+        if args.skip_database:
+            forwarded_args.append("--skip-database")
+        return _run_module_main("healthcheck", forwarded_args)
 
     parser.error(f"Unsupported command: {args.command}")
     return 2

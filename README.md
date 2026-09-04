@@ -81,6 +81,18 @@ python3 main.py gmail --auth-only
 python3 main.py gmail --lookback-seconds 30 --timeout 120
 ```
 
+Проверить локальную настройку без парсинга Ozon:
+
+```bash
+python3 main.py doctor
+```
+
+Проверить только локальные файлы и cookies, без PostgreSQL:
+
+```bash
+python3 main.py doctor --skip-database
+```
+
 Авторизоваться в Ozon обычным Playwright-браузером:
 
 ```bash
