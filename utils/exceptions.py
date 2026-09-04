@@ -71,3 +71,50 @@ class ProductParseError(OzonParserError):
 
 class StorageError(OzonParserError):
     """A parsed product could not be persisted."""
+
+
+def recovery_hint(error: OzonParserError) -> str | None:
+    """Return a concise operator hint for an expected application failure."""
+    if isinstance(error, ConfigurationError):
+        return "Check .env against .env.example, then run `python3 main.py doctor`."
+    if isinstance(error, (CookiesNotFoundError, CookiesExpiredError)):
+        return (
+            "Refresh Ozon cookies with `python3 main.py auth`, or capture an "
+            "authorized local Chrome session with `python3 main.py auth "
+            "--cdp-url http://127.0.0.1:9223 --capture-only`."
+        )
+    if isinstance(error, CookiesInvalidError):
+        return (
+            "Delete the invalid cookies file and refresh it with "
+            "`python3 main.py auth`."
+        )
+    if isinstance(error, (OzonCaptchaError, OzonAntiBotError)):
+        return (
+            "Complete the Ozon browser check manually, then rerun the parser."
+        )
+    if isinstance(error, OzonLoginError):
+        return (
+            "Run `python3 main.py auth` again and keep the browser open until "
+            "authorization finishes."
+        )
+    if isinstance(error, GmailAuthenticationError):
+        return (
+            "Check credentials.json and refresh Gmail OAuth with "
+            "`python3 main.py gmail --auth-only`."
+        )
+    if isinstance(error, (GmailMessageNotFoundError, GmailCodeNotFoundError)):
+        return (
+            "Request a fresh Ozon code and retry with "
+            "`python3 main.py gmail --lookback-seconds 30 --timeout 120`."
+        )
+    if isinstance(error, StorageError):
+        return (
+            "Run `python3 main.py doctor`; for a CSV-only check use "
+            "`python3 main.py parse --csv-only`."
+        )
+    if isinstance(error, ProductPageError):
+        return (
+            "Check that cookies are fresh with `python3 main.py doctor "
+            "--skip-database`, then retry the SKU."
+        )
+    return None

@@ -13,7 +13,7 @@ from models.product import Product
 from parsers.product_parser import ProductParser
 from storage.csv_storage import CsvProductStorage
 from storage.postgres_storage import PostgresProductStorage
-from utils.exceptions import OzonParserError
+from utils.exceptions import OzonParserError, recovery_hint
 
 if TYPE_CHECKING:
     from config import Settings
@@ -182,6 +182,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path,
             exc,
         )
+        hint = recovery_hint(exc)
+        if hint:
+            LOGGER.error("Next step: %s", hint)
         return 1
 
     if result.has_failures:

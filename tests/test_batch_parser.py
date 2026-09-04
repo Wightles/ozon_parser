@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 import parse_ozon
 from models.product import Product
 from parse_ozon import parse_products, run_configured_batch
-from utils.exceptions import ProductPageError
+from utils.exceptions import ProductPageError, StorageError
 
 
 class FakeClient:
@@ -275,3 +276,37 @@ def test_parse_main_rejects_invalid_sku_override(
     )
 
     assert parse_ozon.main(["--sku", "not-a-sku"]) == 2
+
+
+def test_parse_main_logs_recovery_hint_for_expected_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fake_run_configured_batch(
+        settings: object,
+        *,
+        skus: tuple[str, ...] | None = None,
+        save_database: bool = True,
+        output_path: Path | None = None,
+    ) -> object:
+        del settings, skus, save_database, output_path
+        raise StorageError("database unavailable")
+
+    monkeypatch.setattr(
+        parse_ozon,
+        "run_configured_batch",
+        fake_run_configured_batch,
+    )
+    monkeypatch.setattr(
+        "config.get_settings",
+        lambda: BatchSettings(tmp_path),
+    )
+    monkeypatch.setattr("logging_config.configure_logging", lambda _level: None)
+
+    with caplog.at_level(logging.ERROR):
+        result = parse_ozon.main([])
+
+    assert result == 1
+    assert "Next step:" in caplog.text
+    assert "python3 main.py doctor" in caplog.text

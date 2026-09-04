@@ -120,6 +120,8 @@ def test_check_cookies_reports_invalid_cookie_file(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.name == "Ozon cookies"
+    assert "Next step:" in result.message
+    assert "python3 main.py auth" in result.message
 
 
 def test_check_database_verifies_required_schema_objects(

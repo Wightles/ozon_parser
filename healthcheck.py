@@ -12,7 +12,7 @@ from config import get_settings
 from logging_config import configure_logging
 from ozon_client import apply_cookies, load_cookies
 from storage.postgres_storage import PostgresProductStorage
-from utils.exceptions import OzonParserError
+from utils.exceptions import OzonParserError, recovery_hint
 
 if TYPE_CHECKING:
     from config import Settings
@@ -54,6 +54,14 @@ def _fail(name: str, message: str) -> CheckResult:
     return CheckResult(name=name, ok=False, message=message)
 
 
+def _failure_result(name: str, error: OzonParserError) -> CheckResult:
+    message = str(error)
+    hint = recovery_hint(error)
+    if hint:
+        message = f"{message}. Next step: {hint}"
+    return _fail(name, message)
+
+
 def _path_label(path: Path) -> str:
     try:
         return str(path.relative_to(Path.cwd()))
@@ -74,7 +82,7 @@ def check_cookies(settings: Settings) -> CheckResult:
         cookies = load_cookies(settings.cookies_path)
         active_count = apply_cookies(_CookieCheckSession(), cookies)
     except OzonParserError as exc:
-        return _fail("Ozon cookies", str(exc))
+        return _failure_result("Ozon cookies", exc)
     return _ok("Ozon cookies", f"{active_count} active cookie(s)")
 
 
@@ -85,7 +93,7 @@ def check_database(settings: Settings) -> CheckResult:
             storage.check_connection()
             missing_objects = _missing_schema_objects(storage.connection)
     except OzonParserError as exc:
-        return _fail("PostgreSQL", str(exc))
+        return _failure_result("PostgreSQL", exc)
     except Exception as exc:
         return _fail("PostgreSQL", f"schema check failed: {exc}")
 
