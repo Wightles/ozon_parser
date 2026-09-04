@@ -58,6 +58,23 @@ POSTGRES_CHANNEL_BINDING=require
 
 ## Команды
 
+Короткие алиасы:
+
+```bash
+make help
+make doctor-local
+make parse-csv
+make test
+```
+
+По умолчанию `Makefile` использует тот же путь к зависимостям, который был
+проверен в текущем окружении. Если зависимости установлены в другом месте,
+переопределите его так:
+
+```bash
+make test PROJECT_PYTHONPATH=/path/to/dependencies
+```
+
 Основной запуск парсера:
 
 ```bash
