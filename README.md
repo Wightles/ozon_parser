@@ -94,6 +94,12 @@ python3 main.py parse --sku 2359066702,2829800382
 python3 main.py parse --csv-only --sku 2359066702
 ```
 
+Разовая выгрузка в отдельный файл:
+
+```bash
+python3 main.py parse --csv-only --output results/check.csv --sku 2359066702
+```
+
 Проверить Gmail OAuth:
 
 ```bash

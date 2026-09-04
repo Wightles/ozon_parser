@@ -94,17 +94,18 @@ def run_configured_batch(
     *,
     skus: Sequence[str] | None = None,
     save_database: bool = True,
+    output_path: Path | None = None,
 ) -> BatchResult:
     """Run the complete CSV and PostgreSQL pipeline from shared settings."""
     from ozon_client import create_ozon_client
 
     selected_skus = tuple(skus if skus is not None else settings.ozon_skus)
-    output_path = settings.results_dir / CSV_FILENAME
+    selected_output_path = output_path or settings.results_dir / CSV_FILENAME
     with create_ozon_client(settings) as client:
         result = run_batch(
             skus=selected_skus,
             client=client,
-            output_path=output_path,
+            output_path=selected_output_path,
         )
 
     if not save_database:
@@ -140,6 +141,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write results/products.csv and skip PostgreSQL writes",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="write CSV to this path instead of results/products.csv",
+    )
     return parser
 
 
@@ -151,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_argument_parser().parse_args(argv)
     settings = get_settings()
     configure_logging(settings.log_level)
-    output_path = settings.results_dir / CSV_FILENAME
+    output_path = args.output or settings.results_dir / CSV_FILENAME
     skus = None
     if args.sku:
         try:
@@ -167,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings,
             skus=skus,
             save_database=not args.csv_only,
+            output_path=args.output,
         )
     except OzonParserError as exc:
         LOGGER.error(

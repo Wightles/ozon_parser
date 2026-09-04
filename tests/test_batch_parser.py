@@ -158,6 +158,35 @@ def test_configured_batch_can_skip_database(
     assert (tmp_path / "products.csv").is_file()
 
 
+def test_configured_batch_can_write_custom_output_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_product: Product,
+) -> None:
+    client = ContextClient({"111": "html:111"})
+    output_path = tmp_path / "custom" / "ozon.csv"
+
+    monkeypatch.setattr("ozon_client.create_ozon_client", lambda _: client)
+    monkeypatch.setattr(
+        "parse_ozon.ProductParser", lambda: PassthroughParser(sample_product)
+    )
+    monkeypatch.setattr(
+        "parse_ozon.PostgresProductStorage.from_settings",
+        lambda _settings: CapturingStorage(),
+    )
+
+    result = run_configured_batch(
+        BatchSettings(tmp_path),
+        skus=("111",),
+        save_database=False,
+        output_path=output_path,
+    )
+
+    assert result.products == (sample_product,)
+    assert output_path.is_file()
+    assert not (tmp_path / "products.csv").exists()
+
+
 def test_parse_main_accepts_one_off_sku_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -170,9 +199,11 @@ def test_parse_main_accepts_one_off_sku_override(
         *,
         skus: tuple[str, ...] | None = None,
         save_database: bool = True,
+        output_path: Path | None = None,
     ) -> object:
         captured["skus"] = skus
         captured["save_database"] = save_database
+        captured["output_path"] = output_path
         return type("Result", (), {"has_failures": False})()
 
     monkeypatch.setattr(
@@ -196,22 +227,25 @@ def test_parse_main_accepts_one_off_sku_override(
         "123456789",
     )
     assert captured["save_database"] is True
+    assert captured["output_path"] is None
 
 
-def test_parse_main_accepts_csv_only_mode(
+def test_parse_main_accepts_csv_only_mode_and_output_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, bool] = {}
+    captured: dict[str, object] = {}
 
     def fake_run_configured_batch(
         settings: object,
         *,
         skus: tuple[str, ...] | None = None,
         save_database: bool = True,
+        output_path: Path | None = None,
     ) -> object:
         del settings, skus
         captured["save_database"] = save_database
+        captured["output_path"] = output_path
         return type("Result", (), {"has_failures": False})()
 
     monkeypatch.setattr(
@@ -224,8 +258,11 @@ def test_parse_main_accepts_csv_only_mode(
         lambda: BatchSettings(tmp_path),
     )
 
-    assert parse_ozon.main(["--csv-only"]) == 0
+    assert parse_ozon.main(
+        ["--csv-only", "--output", str(tmp_path / "check.csv")]
+    ) == 0
     assert captured["save_database"] is False
+    assert captured["output_path"] == tmp_path / "check.csv"
 
 
 def test_parse_main_rejects_invalid_sku_override(

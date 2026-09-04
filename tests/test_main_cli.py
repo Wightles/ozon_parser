@@ -77,6 +77,23 @@ def test_parse_command_forwards_csv_only(
     ]
 
 
+def test_parse_command_forwards_output_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_run_module_main(module_name: str, argv: list[str]) -> int:
+        calls.append((module_name, tuple(argv)))
+        return 0
+
+    monkeypatch.setattr(cli, "_run_module_main", fake_run_module_main)
+
+    assert cli.main(["parse", "--output", "results/check.csv"]) == 0
+    assert calls == [
+        ("parse_ozon", ("--output", "results/check.csv"))
+    ]
+
+
 def test_auth_command_forwards_browser_arguments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
