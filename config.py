@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,11 +46,16 @@ def _bool_from_env(name: str, default: bool) -> bool:
     raise ConfigurationError(f"{name} must be true or false")
 
 
-def _sku_list_from_env(name: str, default: str) -> tuple[str, ...]:
-    raw_value = os.getenv(name, default)
+def normalize_ozon_skus(
+    raw_values: Iterable[str],
+    *,
+    name: str = "OZON_SKUS",
+) -> tuple[str, ...]:
+    """Normalize comma/newline-separated Ozon SKU values."""
     skus = tuple(
         dict.fromkeys(
             sku.strip()
+            for raw_value in raw_values
             for sku in raw_value.replace("\n", ",").split(",")
             if sku.strip()
         )
@@ -62,6 +68,10 @@ def _sku_list_from_env(name: str, default: str) -> tuple[str, ...]:
             f"{name} contains invalid SKU values: {', '.join(invalid_skus)}"
         )
     return skus
+
+
+def _sku_list_from_env(name: str, default: str) -> tuple[str, ...]:
+    return normalize_ozon_skus([os.getenv(name, default)], name=name)
 
 
 @dataclass(frozen=True, slots=True)

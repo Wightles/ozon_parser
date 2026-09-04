@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from config import Settings
+from config import Settings, normalize_ozon_skus
 from utils.exceptions import ConfigurationError
 
 
@@ -36,6 +36,13 @@ def test_skus_can_be_configured_from_environment(
         "2829800382",
         "123456789",
     )
+
+
+def test_normalize_ozon_skus_accepts_repeated_cli_values() -> None:
+    assert normalize_ozon_skus(
+        ["2359066702, 2829800382", "2359066702", "123456789"],
+        name="--sku",
+    ) == ("2359066702", "2829800382", "123456789")
 
 
 @pytest.mark.parametrize("raw_value", ["", "   ", "2359066702,sku"])

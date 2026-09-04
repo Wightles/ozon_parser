@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -88,14 +89,19 @@ def run_batch(
     return result
 
 
-def run_configured_batch(settings: Settings) -> BatchResult:
+def run_configured_batch(
+    settings: Settings,
+    *,
+    skus: Sequence[str] | None = None,
+) -> BatchResult:
     """Run the complete CSV and PostgreSQL pipeline from shared settings."""
     from ozon_client import create_ozon_client
 
+    selected_skus = tuple(skus if skus is not None else settings.ozon_skus)
     output_path = settings.results_dir / CSV_FILENAME
     with create_ozon_client(settings) as client:
         result = run_batch(
-            skus=settings.ozon_skus,
+            skus=selected_skus,
             client=client,
             output_path=output_path,
         )
@@ -110,18 +116,44 @@ def run_configured_batch(settings: Settings) -> BatchResult:
     return result
 
 
-def main() -> int:
+def build_argument_parser() -> argparse.ArgumentParser:
+    """Build CLI options for one-off parsing overrides."""
+    parser = argparse.ArgumentParser(
+        description="Parse configured Ozon products and save CSV/PostgreSQL."
+    )
+    parser.add_argument(
+        "--sku",
+        action="append",
+        default=[],
+        help=(
+            "override OZON_SKUS for this run; can be repeated or "
+            "comma-separated"
+        ),
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     """Run the configured authenticated batch parser."""
-    from config import get_settings
+    from config import get_settings, normalize_ozon_skus
     from logging_config import configure_logging
 
+    args = build_argument_parser().parse_args(argv)
     settings = get_settings()
     configure_logging(settings.log_level)
     output_path = settings.results_dir / CSV_FILENAME
+    skus = None
+    if args.sku:
+        try:
+            skus = normalize_ozon_skus(args.sku, name="--sku")
+        except OzonParserError as exc:
+            LOGGER.error("Invalid SKU override: %s", exc)
+            return 2
+
     LOGGER.info("Starting Ozon product parser")
 
     try:
-        result = run_configured_batch(settings)
+        result = run_configured_batch(settings, skus=skus)
     except OzonParserError as exc:
         LOGGER.error(
             "Ozon pipeline failed; any written CSV remains at %s: %s",

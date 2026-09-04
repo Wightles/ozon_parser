@@ -36,6 +36,30 @@ def test_parse_command_runs_parser(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == [("parse_ozon", ())]
 
 
+def test_parse_command_forwards_sku_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_run_module_main(module_name: str, argv: list[str]) -> int:
+        calls.append((module_name, tuple(argv)))
+        return 0
+
+    monkeypatch.setattr(cli, "_run_module_main", fake_run_module_main)
+
+    result = cli.main(
+        ["parse", "--sku", "2359066702,2829800382", "--sku", "123456789"]
+    )
+
+    assert result == 0
+    assert calls == [
+        (
+            "parse_ozon",
+            ("--sku", "2359066702,2829800382", "--sku", "123456789"),
+        )
+    ]
+
+
 def test_auth_command_forwards_browser_arguments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

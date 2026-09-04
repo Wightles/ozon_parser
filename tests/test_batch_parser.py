@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import parse_ozon
 from models.product import Product
 from parse_ozon import parse_products, run_configured_batch
 from utils.exceptions import ProductPageError
@@ -90,6 +91,7 @@ class BatchSettings:
     def __init__(self, results_dir: Path) -> None:
         self.ozon_skus = ("111", "222")
         self.results_dir = results_dir
+        self.log_level = "INFO"
 
 
 def test_configured_batch_uses_skus_from_settings(
@@ -120,3 +122,52 @@ def test_configured_batch_uses_skus_from_settings(
     assert client.requested_skus == ["111", "222"]
     assert CapturingStorage.initialized is True
     assert CapturingStorage.saved_products == result.products
+
+
+def test_parse_main_accepts_one_off_sku_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sample_product: Product,
+) -> None:
+    captured: dict[str, tuple[str, ...] | None] = {}
+
+    def fake_run_configured_batch(
+        settings: object,
+        *,
+        skus: tuple[str, ...] | None = None,
+    ) -> object:
+        captured["skus"] = skus
+        return type("Result", (), {"has_failures": False})()
+
+    monkeypatch.setattr(
+        parse_ozon,
+        "run_configured_batch",
+        fake_run_configured_batch,
+    )
+    monkeypatch.setattr(
+        "config.get_settings",
+        lambda: BatchSettings(tmp_path),
+    )
+
+    result = parse_ozon.main(
+        ["--sku", "2359066702,2829800382", "--sku", "123456789"]
+    )
+
+    assert result == 0
+    assert captured["skus"] == (
+        "2359066702",
+        "2829800382",
+        "123456789",
+    )
+
+
+def test_parse_main_rejects_invalid_sku_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "config.get_settings",
+        lambda: BatchSettings(tmp_path),
+    )
+
+    assert parse_ozon.main(["--sku", "not-a-sku"]) == 2

@@ -76,6 +76,18 @@ OZON_SKUS=2359066702,2829800382,123456789
 python3 main.py parse
 ```
 
+Разовый запуск без правки `.env`:
+
+```bash
+python3 main.py parse --sku 2359066702 --sku 2829800382
+```
+
+Или одной строкой:
+
+```bash
+python3 main.py parse --sku 2359066702,2829800382
+```
+
 Проверить Gmail OAuth:
 
 ```bash

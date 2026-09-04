@@ -15,9 +15,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser(
+    parse_parser = subparsers.add_parser(
         "parse",
         help="parse configured Ozon SKU values and save CSV/PostgreSQL output",
+    )
+    parse_parser.add_argument(
+        "--sku",
+        action="append",
+        default=[],
+        help=(
+            "override OZON_SKUS for this run; can be repeated or "
+            "comma-separated"
+        ),
     )
 
     auth_parser = subparsers.add_parser(
@@ -88,7 +97,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command in {None, "parse"}:
-        return _run_module_main("parse_ozon", [])
+        forwarded_args = []
+        for sku in getattr(args, "sku", []):
+            forwarded_args.extend(["--sku", sku])
+        return _run_module_main("parse_ozon", forwarded_args)
 
     if args.command == "auth":
         forwarded_args: list[str] = []
